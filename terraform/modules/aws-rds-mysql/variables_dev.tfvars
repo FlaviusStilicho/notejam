@@ -1,0 +1,7 @@
+env = "dev"
+db_identifier = "notejam-db-dev"
+engine_version = "5.7"
+instance_class = "db.t3.micro"
+db_user = "notejam"
+db_pass = "youshallnotpassword"
+db_subnet_group_name = "notejam-dev"

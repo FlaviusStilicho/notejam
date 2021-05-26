@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notejam
+  labels:
+    app: notejam
+    tier: app
+spec:
+  selector:
+    matchLabels:
+      app: notejam
+      tier: app
+  template:
+    metadata:
+      labels:
+        app: notejam
+        tier: app
+    spec:
+      containers:
+      - image: registry.hub.docker.com/alexbakker/notejam-alex:latest
+        imagePullPolicy: Always
+        name: notejam-alex
+        ports:
+        - containerPort: 8080
+        env:
+          - name: DB_USER
+            value: notejam
+          - name: DB_PASS
+            value: youshallnotpassword
+          - name: DB_URL
+            value: jdbc:mysql://mysql:3306/notejam?createDatabaseIfNotExists=true&autoReconnect=true
+        resources:
+          requests:
+            cpu: "100m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 3
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 3

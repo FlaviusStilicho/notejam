@@ -1,0 +1,23 @@
+Business Requirements
+NOTE: You may not be able to implement all the requirements with reasonable effort. Do what you need for a
+demo and ensure you can present a plan on how the missing features can be added. If you find something
+important missing from the list below, feel free to propose new features with justification and work estimates.
+
+-   The Application must serve variable amount of traffic. Most users are active during business hours. During big
+    events and conferences the traffic could be 4 times more than typically.
+-   The Customer takes guarantee to preserve your notes up to 3 years and recover it if needed.
+-   The Customer ensures continuity in service in case of datacenter failures.
+-   The Service must be capable of being migrated to any of the regions supported by the cloud provider in case
+    of emergency.
+-   The Customer is planning to have more than 100 developers to work in this project who want to roll out
+    multiple deployments a day without interruption / downtime.
+-   The Customer wants to provision separated environments to support their development process for
+    development, testing and production in the near future.
+-   The Customer wants to see relevant metrics and logs from the infrastructure for quality assurance and
+    security purposes.
+
+Outputs
+The Customer (ie. Nordcloud tech. interviewer) wants you to
+- Present your solution and demonstrate the benefits supported by proper documentation.
+- Provide all the source code produced in the creation of the infrastructure in an organized way.
+- Provide a working solution to deploy Notejam and all required components of your infrastructure

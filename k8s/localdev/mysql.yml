@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+  labels:
+    app: notejam
+spec:
+  selector:
+    matchLabels:
+      app: notejam
+      tier: mysql
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: notejam
+        tier: mysql
+    spec:
+      containers:
+        - image: mysql
+          name: mysql
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: root
+            - name: MYSQL_USER
+              value: notejam
+            - name: MYSQL_PASSWORD
+              value: youshallnotpassword
+            - name: MYSQL_DATABASE
+              value: notejam
+          args: ["--default-authentication-plugin=mysql_native_password"]
+          ports:
+            - containerPort: 3306
+              name: mysql
+

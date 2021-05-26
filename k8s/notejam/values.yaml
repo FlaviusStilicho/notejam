@@ -1,0 +1,74 @@
+env: dev
+
+replicaCount: 1
+
+notejam:
+  port: 8080
+
+image:
+  repository: registry.hub.docker.com/alexbakker/notejam-alex:latest
+  pullPolicy: Always
+  tag: ""
+
+db:
+  user: notejam #should be pipeline var
+  pass: youshallnotpassword #should be pipeline var
+  url: jdbc:mysql://notejam-db-dev.c8lj5pdfr3p7.eu-central-1.rds.amazonaws.com:3306/notejam?createDatabaseIfNotExists=true&autoReconnect=true&useSSL=false #this should be fetched with an initcontainer
+  port: 3306
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext: {}
+
+securityContext: {}
+
+service:
+  type: LoadBalancer
+  port: 80
+  targetPort: 8080
+  annotations: {}
+
+ingress:
+  enabled: true
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+  hosts:
+    - host:
+      paths:
+      - path: /*
+        backend:
+          serviceName: notejam
+          servicePort: 8080
+  tls: []
+
+resources:
+  limits:
+    cpu: 400m
+    memory: 256Mi
+  requests:
+    cpu: 200m
+    memory: 128Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 2
+  targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}

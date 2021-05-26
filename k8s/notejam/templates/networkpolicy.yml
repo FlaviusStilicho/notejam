@@ -1,0 +1,30 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "notejam.fullname" . }}
+  labels:
+    {{- include "notejam.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "notejam.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 0.0.0.0/0 #should be narrowew this range to only contain the load balancer
+        - podSelector:
+            matchLabels:
+              {{- include "notejam.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.notejam.port }}
+  egress:
+    - to:
+        - ipBlock:
+             cidr: "172.16.7.0/16" #should be more limited - perhaps could use an initcontainer to fetch the range programmatically on deploy?
+      ports:
+        - protocol: TCP
+          port: {{ .Values.db.port }}
