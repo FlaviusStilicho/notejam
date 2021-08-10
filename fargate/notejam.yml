@@ -1,0 +1,427 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Notejam Deployment"
+Transform: [AWS::Serverless-2016-10-31, AWS::SecretsManager-2020-07-23]
+
+Parameters:
+  VpcId: 
+    Description: 'ID of the VPC' 
+    Type: AWS::EC2::VPC::Id
+    Default: "vpc-1a2e9a63"
+  SubnetIDs:
+    Description: 'IDs of the private subnets in which the ec2 autoscaling group is deployed, comma seperated' 
+    Type: String
+    Default: "subnet-c632109c, subnet-a1d233d8, subnet-3fe01074"
+  DBInstanceType:
+    Description: RDS DB instance type
+    Type: String
+    Default: db.t2.small
+    AllowedValues: [db.t2.small, db.t2.medium, db.t2.large, db.t2.xlarge, db.t2.2xlarge]
+    ConstraintDescription: must be a valid EC2 instance type.
+  NotejamImageName:
+    Description: Image used by the Notejam Application
+    Type: String
+    Default: registry.hub.docker.com/alexbakker/notejam-alex
+  ServiceName:
+    Type: String
+    Default: notejam-service
+  ContainerPort:
+    Type: Number
+    Default: 8080
+  LoadBalancerPort:
+    Type: Number
+    Default: 8080
+  HealthCheckPath:
+    Type: String
+    Default: /signin
+  HostedZoneName:
+    Type: String
+    Default: alex-sandbox.com
+  Subdomain:
+    Type: String
+    Default: notejam
+  MinContainers:
+    Type: Number
+    Default: 1
+  MaxContainers:
+    Type: Number
+    Default: 3
+  ContainerCPU:
+    Type: String
+    Default: 512
+    AllowedValues: [256, 512, 1024, 2048, 4096]
+  ContainerRAM:
+    Type: String
+    Default: 1GB
+    AllowedValues: [0.5GB, 1GB, 2GB, 3GB, 4GB, 5GB, 6GB, 7GB, 8GB]
+  AutoScalingTargetValue:
+    Type: Number
+    Default: 70  
+  DBInstanceIdentifier:
+    Description: name of the RDS instance
+    Type: String
+    Default: 'notejam-db-dev'
+
+Resources:
+  #DNS
+  # probably a bit expensive...
+  # HostedZone:
+  #   Type: AWS::Route53::HostedZone
+  #   Properties: 
+  #     Name: !Ref HostedZoneName
+  # DNSRecord:
+  #   Type: AWS::Route53::RecordSet
+  #   Properties:
+  #     HostedZoneName: !Ref HostedZoneName
+  #     Name: !Sub '*.${HostedZoneName}'
+  #     Type: A
+  #     TTL: 900
+  #     AliasTarget:
+  #       DNSName: !GetAtt LoadBalancer.DNSName
+  #       HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID
+  # Certificate: 
+  #   Type: AWS::CertificateManager::Certificate
+  #   Properties:
+  #     ValidationMethod: DNS
+  #     DomainName: !Sub ${Subdomain}.${HostedZoneName}
+  #     DomainValidationOptions: 
+  #       - DomainName: !Sub ${Subdomain}.${HostedZoneName}
+  #         HostedZoneId: !Ref HostedZone
+
+  #Load balancer
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 10
+      HealthCheckPath: !Ref HealthCheckPath
+      HealthCheckTimeoutSeconds: 5
+      UnhealthyThresholdCount: 2
+      HealthyThresholdCount: 2
+      Name: !Join ['', [!Ref ServiceName, TargetGroup]]
+      Port: !Ref ContainerPort
+      Protocol: HTTP
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '60'
+      TargetType: ip
+      VpcId: !Ref VpcId
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - TargetGroupArn: !Ref TargetGroup
+          Type: forward
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: !Ref LoadBalancerPort
+      Protocol: HTTP
+#  /     Certificates:
+        # - CertificateArn: !Ref Certificate
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '60'
+      #   - Key: access_logs.s3.enabled 
+      #     Value: 'true'
+      #   - Key: access_logs.s3.bucket
+      #     Value: 'abcde'
+      # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-elasticloadbalancingv2-loadbalancer.html
+      Name: !Join ['', [!Ref ServiceName, LoadBalancer]]
+      Scheme: internet-facing
+      SecurityGroups: [!Ref LoadBalancerSecurityGroup]
+      Subnets: !Split [",", !Ref SubnetIDs]
+      Type: 'application'
+
+  #Web tier (Fargate)
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Join ['', [!Ref ServiceName, -cluster]]
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Join ['', [!Ref ServiceName, TaskDefinition]]
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: !Ref ContainerCPU
+      Memory: !Ref ContainerRAM
+      ExecutionRoleArn: !GetAtt [ExecutionRole, Arn]
+      TaskRoleArn: !Ref TaskRole
+      ContainerDefinitions:
+        - Name: !Ref ServiceName
+          Image: !Ref NotejamImageName
+          PortMappings:
+            - ContainerPort: !Ref ContainerPort
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Ref AWS::Region
+              awslogs-group: !Ref LogGroup
+              awslogs-stream-prefix: ecs
+          Secrets: 
+          - Name: DB_URL
+            ValueFrom: !Ref EndpointSSMParameter
+          - Name: DB_USER
+            ValueFrom: !Sub '${NotejamDBSecret}:username::'
+          - Name: DB_PASS
+            ValueFrom: !Sub '${NotejamDBSecret}:password::'
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['', [!Ref ServiceName, ExecutionRole]]
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: ecs-secrets-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+              - ssm:GetParameters
+              - secretsmanager:GetSecretValue
+              Resource: '*'
+      ManagedPolicyArns:
+      - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['', [!Ref ServiceName, TaskRole]]
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMReadOnlyAccess
+  AutoScalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['', [!Ref ServiceName, AutoScalingRole]]
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceAutoscaleRole'
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: [Listener]
+    Properties: 
+      ServiceName: !Ref ServiceName
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref TaskDefinition
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 200
+      DesiredCount: 0
+      HealthCheckGracePeriodSeconds: 120
+      LaunchType: FARGATE
+      NetworkConfiguration: 
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: !Split [",", !Ref SubnetIDs]
+          SecurityGroups: [!Ref ContainerSecurityGroup]
+      LoadBalancers:
+        - ContainerName: !Ref ServiceName
+          ContainerPort: !Ref ContainerPort
+          TargetGroupArn: !Ref TargetGroup
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ['', [/ecs/, !Ref ServiceName, TaskDefinition]]
+  AutoScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MinCapacity: !Ref MinContainers
+      MaxCapacity: !Ref MaxContainers
+      ResourceId: !Join ['/', [service, !Ref Cluster, !GetAtt Service.Name]]
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      RoleARN: !GetAtt AutoScalingRole.Arn
+  AutoScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Join ['', [!Ref ServiceName, AutoScalingPolicy]]
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref AutoScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        ScaleInCooldown: 10
+        ScaleOutCooldown: 10
+        TargetValue: !Ref AutoScalingTargetValue
+
+  #Storage tier
+  MysqlDB:
+    Type: AWS::RDS::DBInstance
+    Properties: 
+      DBInstanceClass: !Ref DBInstanceType
+      DBInstanceIdentifier: !Ref DBInstanceIdentifier
+      DBName: 'notejam'
+      VPCSecurityGroups: [!Ref MysqlSecurityGroup]
+      Engine: 'mysql'
+      EngineVersion: '8.0.25'
+      StorageEncrypted: true
+      KmsKeyId: !Ref 'RdsKmsKey'
+      EnableCloudwatchLogsExports: ['audit', 'error']
+      MasterUsername: !Sub "{{resolve:secretsmanager:${NotejamDBSecret}::username}}"
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${NotejamDBSecret}::password}}"
+      AllocatedStorage: '20'
+      MultiAZ: false
+      OptionGroupName: !Ref DBOptionGroup
+  DBOptionGroup: 
+    Type: "AWS::RDS::OptionGroup"
+    Properties: 
+      EngineName: mysql 
+      MajorEngineVersion: "8.0"
+      OptionConfigurations: 
+        - OptionName: MARIADB_AUDIT_PLUGIN          
+          OptionSettings: 
+            - Name: SERVER_AUDIT_FILE_ROTATIONS
+              Value: '100'
+      OptionGroupDescription: "Option group that enables audit logging"
+  RdsKmsKey:
+    Type: "AWS::KMS::Key"
+    Properties:
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: 'key-default-1'
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Join
+                - ""
+                - - "arn:aws:iam::"
+                  - !Ref "AWS::AccountId"
+                  - ":user/alex"
+            Action: "kms:*"
+            Resource: "*"
+
+  #Secrets/parameters
+  DBSecretAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId:
+        Ref: NotejamDBSecret
+      TargetId:
+        Ref: MysqlDB
+      TargetType: AWS::RDS::DBInstance
+  NotejamDBSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Notejam DB secret
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "root"}'
+        GenerateStringKey: password
+        PasswordLength: 16
+        ExcludeCharacters: "\"@/\\"
+  EndpointSSMParameter:
+    Type: AWS::SSM::Parameter
+    Properties: 
+      Description: "Endpoint of the notejam DB. THe app fetches this endpoint in order to connect to the DB."
+      Type: String
+      Name: "/application/notejam/db-endpoint"
+      Value: !Sub 'jdbc:mysql://${MysqlDB.Endpoint.Address}:3306/notejam?createDatabaseIfNotExists=true&autoReconnect=true'
+      # the below lambda function fails to create with a USELESS error message
+  # SecretRotationSchedule:
+  #   Type: AWS::SecretsManager::RotationSchedule
+  #   DependsOn: DBSecretAttachment
+  #   Properties:
+  #     SecretId:
+  #       Ref: NotejamDBSecret
+  #     HostedRotationLambda:
+  #       RotationType: MySQLSingleUser
+  #       RotationLambdaName: !Ref SecretsManagerRotation
+  #       VpcSecurityGroupIds: !Ref MysqlSecurityGroup
+  #       VpcSubnetIds: !Ref SubnetIDs
+  #     RotationRules:
+  #       AutomaticallyAfterDays: 30
+  # SecretsManagerRotation:  
+  #   Type: AWS::Serverless::Application
+  #   Properties:
+  #     Location:
+  #       ApplicationId: 'arn:aws:serverlessrepo:us-east-1:297356227824:applications/SecretsManagerRDSMySQLRotationSingleUser'
+  #       SemanticVersion: 1.1.165
+  #     Parameters:
+  #       endpoint: !Sub https://secretsmanager.${AWS::Region}.amazonaws.com
+  #       functionName: RDSMySQLSingleUserRotationLambda
+  
+  #Security groups
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Join ['', [!Ref ServiceName, LoadBalancerSecurityGroup]]
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref LoadBalancerPort
+          ToPort: !Ref LoadBalancerPort
+          CidrIp: 0.0.0.0/0
+  LoadBalancerSecurityGroupEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref LoadBalancerSecurityGroup
+      IpProtocol: tcp
+      FromPort: !Ref ContainerPort
+      ToPort: !Ref ContainerPort
+      DestinationSecurityGroupId: 
+        Fn::GetAtt: [ ContainerSecurityGroup, GroupId ]
+  ContainerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Join ['', [!Ref ServiceName, ContainerSecurityGroup]]
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref ContainerPort
+          ToPort: !Ref ContainerPort
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: '0.0.0.0/0'
+  ContainerSecurityGroupEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref ContainerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      DestinationSecurityGroupId: 
+        Fn::GetAtt: [ MysqlSecurityGroup, GroupId ]
+  MysqlSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable Mysql ingress
+      VpcId: !Ref VpcId
+  MysqlSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref MysqlSecurityGroup
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      SourceSecurityGroupId: 
+        Fn::GetAtt: [ ContainerSecurityGroup, GroupId ]
+
+# further improvements:
+  # WAF
+  # Add a domain (see commented code)
+  # enforce HTTPS on the connection between webserver and RDS -> would require running a command on the DB. Could be done in the schema.sql on boot, or using liquibase in a "better" setup
+    # ALTER USER 'root'@'%' REQUIRE SSL;      
+  # allow the app to send emails, perhaps using SES
+
+# problems:
+  # containers run in public subnet -> should be private, would require vpc endpoint for secretsmanager. To do this, I would create a custom vpc with code.
+  # password rotation lambda doesnt work / wont be created for some reason
